@@ -1,12 +1,14 @@
 'use strict';
 
-const { Clutter, Meta, Shell, St, GObject } = imports.gi;
+const { Clutter, Meta, Shell, St, GObject, Gio } = imports.gi;
 const Mainloop = imports.mainloop;
 const MessageTray = imports.ui.messageTray;
 
 const Main = imports.ui.main;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
+
+const Lang = imports.lang;
 
 const Gettext = imports.gettext;
 
@@ -40,6 +42,9 @@ const Store = Me.imports.store;
 const DS = Me.imports.dataStructures;
 const ConfirmDialog = Me.imports.confirmDialog;
 const Prefs = Me.imports.prefs;
+
+const htmlToPlaintext = Me.imports.toMarkdown.htmlToPlaintext;
+const htmlToMarkdown = Me.imports.toMarkdown.htmlToMarkdown;
 
 const IndicatorName = `${Me.metadata.name} Indicator`;
 const _ = Gettext.domain(Me.uuid).gettext;
@@ -100,6 +105,10 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (this._pasteHackCallbackId) {
       Mainloop.source_remove(this._pasteHackCallbackId);
       this._pasteHackCallbackId = undefined;
+    }
+    if (this._keyPressCallbackId) {
+      global.stage.disconnect(this._keyPressCallbackId);
+      this._keyPressCallbackId = undefined;
     }
     if (this._primaryClipboardCallbackId) {
       Mainloop.source_remove(this._primaryClipboardCallbackId);
@@ -236,8 +245,9 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (ENABLE_KEYBINDING) {
       this._bindShortcuts();
     }
-    this.menu.actor.connect('key-press-event', (_, event) =>
-      this._handleGlobalKeyEvent(event),
+    this._keyPressCallbackId = this.menu.actor.connect(
+      'key-press-event',
+      (_, event) => this._handleGlobalKeyEvent(event),
     );
 
     Store.buildClipboardStateFromLog((entries, favoriteEntries, nextId) => {
@@ -376,6 +386,52 @@ class ClipboardIndicator extends PanelMenu.Button {
 
     this._setEntryLabel(menuItem);
 
+    if (entry.html) {
+      // Html button
+      let htmiconPath = `${Me.path}/icons/html-symbolic.svg`;
+      let htmgicon = Gio.icon_new_for_string(`${htmiconPath}`);
+      let htmicon = new St.Icon({
+        gicon: htmgicon,
+        style_class: 'system-status-icon'
+      });
+
+      let htmicoBtn = new St.Button({
+        style_class: 'ci-action-btn',
+        can_focus: true,
+        child: htmicon,
+        x_align: Clutter.ActorAlign.END,
+        x_expand: true,
+        y_expand: true
+      });
+
+      menuItem.actor.add_child(htmicoBtn);
+      htmicoBtn.connect('clicked', () => {
+        this._htmlToClipboard(menuItem);
+      });
+
+      // Markdown button
+      let mdiconPath = `${Me.path}/icons/markdown-symbolic.svg`;
+      let mdgicon = Gio.icon_new_for_string(`${mdiconPath}`);
+      let mdicon = new St.Icon({
+        gicon: mdgicon,
+        style_class: 'system-status-icon'
+      });
+
+      let mdicoBtn = new St.Button({
+        style_class: 'ci-action-btn',
+        can_focus: true,
+        child: mdicon,
+        x_align: Clutter.ActorAlign.END,
+        x_expand: false,
+        y_expand: true
+      });
+
+      menuItem.actor.add_child(mdicoBtn);
+      mdicoBtn.connect('clicked', () => {
+        this._markdownToClipboard(menuItem);
+      });
+    }
+
     // Favorite button
     const icon_name = entry.favorite
       ? 'starred-symbolic'
@@ -390,7 +446,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       can_focus: true,
       child: iconfav,
       x_align: Clutter.ActorAlign.END,
-      x_expand: true,
+      x_expand: !entry.html,
       y_expand: true,
     });
 
@@ -476,6 +532,27 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
   }
 
+  _htmlToClipboard(menuItem) {
+    const entry = menuItem.entry;
+    Clipboard.set_text(St.ClipboardType.CLIPBOARD, entry.html);
+    Clipboard.set_text(St.ClipboardType.PRIMARY, entry.html);
+    if (PASTE_ON_SELECTION) {
+      this._triggerPasteHack();
+    }
+    this.menu.close();
+  }
+
+  _markdownToClipboard(menuItem) {
+    const entry = menuItem.entry;
+    let markDown = htmlToMarkdown(entry.html);
+    Clipboard.set_text(St.ClipboardType.CLIPBOARD, markDown);
+    Clipboard.set_text(St.ClipboardType.PRIMARY, markDown);
+    if (PASTE_ON_SELECTION) {
+      this._triggerPasteHack();
+    }
+    this.menu.close();
+  }
+
   _favoriteToggle(menuItem) {
     const entry = menuItem.entry;
     const wasSelected = this.currentlySelectedEntry?.id === entry.id;
@@ -492,7 +569,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (entry.favorite) {
         entry.diskId = this.nextDiskId++;
 
-        Store.storeTextEntry(entry.text);
+        Store.storeTextEntry(entry.text, entry.html);
         Store.updateFavoriteStatus(entry.diskId, true);
       } else {
         Store.deleteTextEntry(entry.diskId, true);
@@ -810,9 +887,26 @@ class ClipboardIndicator extends PanelMenu.Button {
       return;
     }
 
-    Clipboard.get_text(St.ClipboardType.CLIPBOARD, (_, text) => {
-      this._processClipboardContent(text);
-    });
+    let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
+
+    if (mimetypes.includes("text/plain")) {
+      Clipboard.get_text(St.ClipboardType.CLIPBOARD, (_, text) => {
+        if (mimetypes.includes("text/html")) {
+          Clipboard.get_content(St.ClipboardType.CLIPBOARD, "text/html", (_, content) => {
+            if (content && content.get_size() > 0) {
+              let html = new TextDecoder().decode(content.get_data());
+              this._processClipboardContent(text, html);
+            }
+            else {
+              this._processClipboardContent(text);
+            }
+          });
+        }
+        else {
+          this._processClipboardContent(text);
+        }
+      });
+    }
   }
 
   _queryPrimaryClipboard() {
@@ -824,15 +918,37 @@ class ClipboardIndicator extends PanelMenu.Button {
       Mainloop.source_remove(this._primaryClipboardCallbackId);
     }
     this._primaryClipboardCallbackId = Mainloop.timeout_add(100, () => {
-      Clipboard.get_text(St.ClipboardType.PRIMARY, (_, text) => {
-        this._processClipboardContent(text);
-        this._primaryClipboardCallbackId = undefined;
-        return false;
-      });
+
+      let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.PRIMARY);
+
+      if (mimetypes.includes("text/plain")) {
+        Clipboard.get_text(St.ClipboardType.PRIMARY, (_, text) => {
+          if (mimetypes.includes("text/html")) {
+            Clipboard.get_content(St.ClipboardType.PRIMARY, "text/html", (_, content) => {
+              if (content && content.get_size() > 0) {
+                let html = new TextDecoder().decode(content.get_data());
+                this._processClipboardContent(text, html);
+                this._primaryClipboardCallbackId = undefined;
+                return false;
+              }
+              else {
+                this._processClipboardContent(text);
+                this._primaryClipboardCallbackId = undefined;
+                return false;
+              }
+            });
+          }
+          else {
+            this._processClipboardContent(text);
+            this._primaryClipboardCallbackId = undefined;
+            return false;
+          }
+        });
+      }
     });
   }
 
-  _processClipboardContent(text) {
+  _processClipboardContent(text, html) {
     if (this._debouncing > 0) {
       this._debouncing--;
       return;
@@ -863,12 +979,13 @@ class ClipboardIndicator extends PanelMenu.Button {
       entry.diskId = CACHE_ONLY_FAVORITES ? undefined : this.nextDiskId++;
       entry.type = DS.TYPE_TEXT;
       entry.text = text;
+      entry.html = html;
       entry.favorite = false;
       this.entries.append(entry);
       this._addEntry(entry, true, false, 0);
 
       if (!CACHE_ONLY_FAVORITES) {
-        Store.storeTextEntry(text);
+        Store.storeTextEntry(text, html);
       }
       this._pruneOldestEntries();
     }
@@ -1075,7 +1192,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       } else {
         for (const entry of this.entries) {
           entry.diskId = this.nextDiskId++;
-          Store.storeTextEntry(entry.text);
+          Store.storeTextEntry(entry.text, entry.html);
         }
       }
     }

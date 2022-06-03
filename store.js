@@ -124,13 +124,18 @@ function _consumeStream(stream, state, callback) {
         0,
         null,
         (src, res) => {
-          const [text] = src.read_upto_finish(res);
+          const [data] = src.read_upto_finish(res);
           src.read_byte(null);
+          let length = src.read_uint32(null);
+          
+          let text = data ? data.substring(0, length) : '';
+          let html = data ? data.substring(length) : null;
 
           const node = new DS.LLNode();
           node.diskId = node.id = state.nextId++;
           node.type = DS.TYPE_TEXT;
-          node.text = text || '';
+          node.text = text;
+          node.html = html;
           node.favorite = false;
           state.entries.append(node);
 
@@ -299,7 +304,7 @@ function resetDatabase(currentStateBuilder) {
             const entry = state[i];
 
             if (entry.type === DS.TYPE_TEXT) {
-              _storeTextOp(entry.text)(dataStream);
+              _storeTextOp(entry.text, entry.html)(dataStream);
             } else {
               throw new TypeError('Unknown type: ' + entry.type);
             }
@@ -318,15 +323,19 @@ function resetDatabase(currentStateBuilder) {
   });
 }
 
-function storeTextEntry(text) {
-  _appendBytesToLog(_storeTextOp(text), -5);
+function storeTextEntry(text, html) {
+  _appendBytesToLog(_storeTextOp(text, html), -5);
 }
 
-function _storeTextOp(text) {
+function _storeTextOp(text, html) {
   return (dataStream) => {
     dataStream.put_byte(OP_TYPE_SAVE_TEXT, null);
     dataStream.put_string(text, null);
+    if (html) {
+      dataStream.put_string(html, null);
+    }
     dataStream.put_byte(0, null); // NUL terminator
+    dataStream.put_uint32(text.length, null);
     return true;
   };
 }
