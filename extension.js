@@ -1,6 +1,6 @@
 'use strict';
 
-const { Clutter, Meta, Shell, St, GObject, Gio } = imports.gi;
+const { Clutter, Meta, Shell, St, GObject, Gio, GLib } = imports.gi;
 const Mainloop = imports.mainloop;
 const MessageTray = imports.ui.messageTray;
 
@@ -45,6 +45,8 @@ const Prefs = Me.imports.prefs;
 
 const htmlToPlaintext = Me.imports.toMarkdown.htmlToPlaintext;
 const htmlToMarkdown = Me.imports.toMarkdown.htmlToMarkdown;
+
+const ByteArray = imports.byteArray;
 
 const IndicatorName = `${Me.metadata.name} Indicator`;
 const _ = Gettext.domain(Me.uuid).gettext;
@@ -532,10 +534,21 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
   }
 
+  _textToClipboard(menuItem) {
+    const entry = menuItem.entry;
+    Clipboard.set_text(St.ClipboardType.CLIPBOARD, entry.text);
+    Clipboard.set_text(St.ClipboardType.PRIMARY, entry.text);
+    if (PASTE_ON_SELECTION) {
+      this._triggerPasteHack();
+    }
+    this.menu.close();
+  }
+
   _htmlToClipboard(menuItem) {
     const entry = menuItem.entry;
-    Clipboard.set_text(St.ClipboardType.CLIPBOARD, entry.html);
-    Clipboard.set_text(St.ClipboardType.PRIMARY, entry.html);
+    const content = ByteArray.toGBytes(ByteArray.fromString(entry.html));
+    Clipboard.set_content(St.ClipboardType.CLIPBOARD, 'text/html', content);
+    Clipboard.set_content(St.ClipboardType.PRIMARY, 'text/html', content);
     if (PASTE_ON_SELECTION) {
       this._triggerPasteHack();
     }
@@ -889,6 +902,7 @@ class ClipboardIndicator extends PanelMenu.Button {
 
     let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
 
+    // 
     if (mimetypes.includes("text/plain")) {
       Clipboard.get_text(St.ClipboardType.CLIPBOARD, (_, text) => {
         if (mimetypes.includes("text/html")) {
