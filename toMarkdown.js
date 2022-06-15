@@ -20,6 +20,13 @@ const isVoid = Whitespace.isVoid;
 var toMarkdown
 var converters
 
+function cell (content, node) {
+  var index = Array.prototype.indexOf.call(node.parentNode.childNodes, node)
+  var prefix = ' '
+  if (index === 0) prefix = '| '
+  return prefix + content + ' |'
+}
+
 var highlightRegEx = /highlight highlight-(\S+)/
 
 const mdConverters = [
