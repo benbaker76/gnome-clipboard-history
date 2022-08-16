@@ -108,10 +108,6 @@ class ClipboardIndicator extends PanelMenu.Button {
       Mainloop.source_remove(this._pasteHackCallbackId);
       this._pasteHackCallbackId = undefined;
     }
-    if (this._keyPressCallbackId) {
-      global.stage.disconnect(this._keyPressCallbackId);
-      this._keyPressCallbackId = undefined;
-    }
     if (this._primaryClipboardCallbackId) {
       Mainloop.source_remove(this._primaryClipboardCallbackId);
       this._primaryClipboardCallbackId = undefined;
@@ -247,9 +243,8 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (ENABLE_KEYBINDING) {
       this._bindShortcuts();
     }
-    this._keyPressCallbackId = this.menu.actor.connect(
-      'key-press-event',
-      (_, event) => this._handleGlobalKeyEvent(event),
+    this.menu.actor.connect('key-press-event', (_, event) =>
+      this._handleGlobalKeyEvent(event),
     );
 
     Store.buildClipboardStateFromLog((entries, favoriteEntries, nextId) => {
@@ -368,7 +363,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       this.historySection.moveMenuItem(item, 0);
 
       if (selectEntry) {
-        this._selectEntry(entry, updateClipboard);
+        this._selectEntry(entry, entry.text, updateClipboard);
       }
       return;
     }
@@ -498,7 +493,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
 
     if (selectEntry) {
-      this._selectEntry(entry, updateClipboard);
+      this._selectEntry(entry, entry.text, updateClipboard);
     }
   }
 
@@ -534,35 +529,15 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
   }
 
-  _textToClipboard(menuItem) {
-    const entry = menuItem.entry;
-    Clipboard.set_text(St.ClipboardType.CLIPBOARD, entry.text);
-    Clipboard.set_text(St.ClipboardType.PRIMARY, entry.text);
-    if (PASTE_ON_SELECTION) {
-      this._triggerPasteHack();
-    }
-    this.menu.close();
-  }
-
   _htmlToClipboard(menuItem) {
-    const entry = menuItem.entry;
-    const content = ByteArray.toGBytes(ByteArray.fromString(entry.html));
-    Clipboard.set_content(St.ClipboardType.CLIPBOARD, 'text/html', content);
-    Clipboard.set_content(St.ClipboardType.PRIMARY, 'text/html', content);
-    if (PASTE_ON_SELECTION) {
-      this._triggerPasteHack();
-    }
+    this._moveEntryFirst(menuItem.entry);
+    this._selectEntry(menuItem.entry, ByteArray.toGBytes(ByteArray.fromString(menuItem.entry.html)), true, true);
     this.menu.close();
   }
 
   _markdownToClipboard(menuItem) {
-    const entry = menuItem.entry;
-    let markDown = htmlToMarkdown(entry.html);
-    Clipboard.set_text(St.ClipboardType.CLIPBOARD, markDown);
-    Clipboard.set_text(St.ClipboardType.PRIMARY, markDown);
-    if (PASTE_ON_SELECTION) {
-      this._triggerPasteHack();
-    }
+    this._moveEntryFirst(menuItem.entry);
+    this._selectEntry(menuItem.entry, htmlToMarkdown(menuItem.entry.html), true, true);
     this.menu.close();
   }
 
@@ -662,8 +637,8 @@ class ClipboardIndicator extends PanelMenu.Button {
 
     Store.maybePerformLogCompaction(this._currentStateBuilder.bind(this));
   }
-
-  _selectEntry(entry, updateClipboard, triggerPaste) {
+  
+  _selectEntry(entry, content, updateClipboard, triggerPaste) {
     this.currentlySelectedEntry?.menuItem?.setOrnament(PopupMenu.Ornament.NONE);
     this.currentlySelectedEntry = entry;
 
@@ -671,7 +646,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     this._updateButtonText(entry);
     if (updateClipboard !== false) {
       if (entry.type === DS.TYPE_TEXT) {
-        this._setClipboardText(entry.text);
+        this._setClipboardContent(content);
       } else {
         throw new TypeError('Unknown type: ' + entry.type);
       }
@@ -682,13 +657,21 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
   }
 
-  _setClipboardText(text) {
+  _setClipboardContent(content) {
     if (this._debouncing !== undefined) {
       this._debouncing++;
     }
-
-    Clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-    Clipboard.set_text(St.ClipboardType.PRIMARY, text);
+    
+    log(content);
+    
+    if (content instanceof GLib.Bytes) {
+      Clipboard.set_content(St.ClipboardType.CLIPBOARD, 'text/html', content);
+      Clipboard.set_content(St.ClipboardType.PRIMARY, 'text/html', content);
+    }
+    else {
+      Clipboard.set_text(St.ClipboardType.CLIPBOARD, content);
+      Clipboard.set_text(St.ClipboardType.PRIMARY, content);
+    }
   }
 
   _triggerPasteHack() {
@@ -725,14 +708,14 @@ class ClipboardIndicator extends PanelMenu.Button {
 
   _onMenuItemSelectedAndMenuClose(menuItem) {
     this._moveEntryFirst(menuItem.entry);
-    this._selectEntry(menuItem.entry, true, true);
+    this._selectEntry(menuItem.entry, menuItem.entry.text, true, true);
     this.menu.close();
   }
 
   _resetSelectedMenuItem() {
     this.currentlySelectedEntry = undefined;
     this._updateButtonText();
-    this._setClipboardText('');
+    this._setClipboardContent('');
   }
 
   _restoreFavoritedEntries() {
@@ -895,70 +878,62 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
   }
 
-  _queryClipboard() {
+  async _queryClipboard() {
     if (PRIVATE_MODE) {
       return;
     }
-
-    let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
-
-    // 
-    if (mimetypes.includes("text/plain")) {
-      Clipboard.get_text(St.ClipboardType.CLIPBOARD, (_, text) => {
-        if (mimetypes.includes("text/html")) {
-          Clipboard.get_content(St.ClipboardType.CLIPBOARD, "text/html", (_, content) => {
-            if (content && content.get_size() > 0) {
-              let html = new TextDecoder().decode(content.get_data());
-              this._processClipboardContent(text, html);
-            }
-            else {
-              this._processClipboardContent(text);
-            }
-          });
-        }
-        else {
-          this._processClipboardContent(text);
-        }
-      });
-    }
+    
+    await Clipboard.get_text(St.ClipboardType.CLIPBOARD, async (_, text) => {
+      let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
+      if (mimetypes.includes("text/html")) {
+        await Clipboard.get_content(St.ClipboardType.CLIPBOARD, "text/html", (_, content) => {
+          if (content && content.get_size() > 0) {
+            let html = new TextDecoder().decode(content.get_data());
+            this._processClipboardContent(text, html);
+          }
+          else {
+            this._processClipboardContent(text);
+          }
+        });
+      }
+      else {
+        this._processClipboardContent(text);
+      }
+    });
   }
 
   _queryPrimaryClipboard() {
     if (PRIVATE_MODE) {
       return;
     }
-
+    
     if (this._primaryClipboardCallbackId) {
       Mainloop.source_remove(this._primaryClipboardCallbackId);
     }
     this._primaryClipboardCallbackId = Mainloop.timeout_add(100, () => {
-
-      let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.PRIMARY);
-
-      if (mimetypes.includes("text/plain")) {
-        Clipboard.get_text(St.ClipboardType.PRIMARY, (_, text) => {
-          if (mimetypes.includes("text/html")) {
-            Clipboard.get_content(St.ClipboardType.PRIMARY, "text/html", (_, content) => {
-              if (content && content.get_size() > 0) {
-                let html = new TextDecoder().decode(content.get_data());
-                this._processClipboardContent(text, html);
-                this._primaryClipboardCallbackId = undefined;
-                return false;
-              }
-              else {
-                this._processClipboardContent(text);
-                this._primaryClipboardCallbackId = undefined;
-                return false;
-              }
-            });
-          }
-          else {
-            this._processClipboardContent(text);
-            this._primaryClipboardCallbackId = undefined;
-            return false;
-          }
-        });
-      }
+      Clipboard.get_text(St.ClipboardType.PRIMARY, async (_, text) => {
+        let mimetypes = Clipboard.get_mimetypes(St.ClipboardType.PRIMARY);
+        if (mimetypes.includes("text/html")) {
+          await Clipboard.get_content(St.ClipboardType.PRIMARY, "text/html", (_, content) => {
+            if (content && content.get_size() > 0) {
+              let html = new TextDecoder().decode(content.get_data());
+              this._processClipboardContent(text, html);
+              this._primaryClipboardCallbackId = undefined;
+              return false;
+            }
+            else {
+              this._processClipboardContent(text);
+              this._primaryClipboardCallbackId = undefined;
+              return false;
+            }
+          });
+        }
+        else {
+          this._processClipboardContent(text);
+          this._primaryClipboardCallbackId = undefined;
+          return false;
+        }
+      });
     });
   }
 
@@ -985,7 +960,7 @@ class ClipboardIndicator extends PanelMenu.Button {
         this._moveEntryFirst(entry);
       }
       if (!isFirst || entry !== this.currentlySelectedEntry) {
-        this._selectEntry(entry, false);
+        this._selectEntry(entry, entry.text, false);
       }
     } else {
       entry = new DS.LLNode();
@@ -1095,7 +1070,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (!this.currentlySelectedEntry) {
       const nextEntry = this.entries.last();
       if (nextEntry) {
-        this._selectEntry(nextEntry, true);
+        this._selectEntry(nextEntry, nextEntry.text, true);
       }
     }
   }
@@ -1147,7 +1122,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     } else {
       this.icon.remove_style_class_name('private-mode');
       if (this.currentlySelectedEntry) {
-        this._selectEntry(this.currentlySelectedEntry, true);
+        this._selectEntry(this.currentlySelectedEntry, this.currentlySelectedEntry.text, true);
       } else {
         this._resetSelectedMenuItem();
       }
@@ -1338,7 +1313,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       return;
     }
 
-    this._selectEntry(entry, true);
+    this._selectEntry(entry, entry.text, true);
     if (entry.type === DS.TYPE_TEXT) {
       this._showNotification(_('Copied'), entry.text);
     }

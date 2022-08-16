@@ -72,11 +72,28 @@ const mdConverters = [
 
   {
       filter: ['strong', 'b'],
-      replacement: function(content) {
-          return '**' + content + '**'
+      replacement: function(content, node) {
+          var parent = node.parentNode
+          var parentStyle = (parent.nodeType == 1 ? parent.getAttribute('style') : null)
+          if (parentStyle && parentStyle.toLowerCase().indexOf('courier') != -1) {
+              var match = /\r|\n/.exec(content);
+              if (match)
+                  return '\n\n```\n' + content + '\n```\n\n'
+              else
+                  return '`' + content + '`'
+          }
+          else
+              return '**' + content + '**'
       }
   },
 
+  /* {
+      filter: ['strong', 'b'],
+      replacement: function(content) {
+          return '**' + content + '**'
+      }
+  }, */
+  
   // Inline code
   {
       filter: function(node) {
@@ -117,7 +134,7 @@ const mdConverters = [
           return node.nodeName === 'PRE' && node.firstChild.nodeName === 'CODE'
       },
       replacement: function(content, node) {
-          return '\n\n    ' + node.firstChild.textContent.replace(/\n/g, '\n    ') + '\n\n'
+          return '\n\n' + node.firstChild.textContent.replace(/\n/g, '\n') + '\n\n'
       }
   },
 
@@ -134,13 +151,13 @@ const mdConverters = [
   {
       filter: 'li',
       replacement: function(content, node) {
-          content = content.replace(/^\s+/, '').replace(/\n/gm, '\n    ')
-          var prefix = '*   '
+          content = content.replace(/^\s+/, '').replace(/\n/gm, '\n')
+          var prefix = '* '
           var parent = node.parentNode
           if (parent.nodeName === 'OL') {
               var start = parent.getAttribute('start')
               var index = Array.prototype.indexOf.call(parent.children, node)
-              prefix = (start ? Number(start) + index : index + 1) + '.  '
+              prefix = (start ? Number(start) + index : index + 1) + '. '
           }
 
           return prefix + content
@@ -321,7 +338,7 @@ const pandocConverters = [
   {
       filter: 'br',
       replacement: function() {
-          return '\\\n';
+          return '\n';
       }
   },
 
@@ -375,8 +392,8 @@ const pandocConverters = [
   {
       filter: 'li',
       replacement: function(content, node) {
-          content = content.replace(/^\s+/, '').replace(/\n/gm, '\n    ');
-          var prefix = '-   ';
+          content = content.replace(/^\s+/, '').replace(/\n/gm, '\n');
+          var prefix = '- ';
           var parent = node.parentNode;
 
           if (/ol/i.test(parent.nodeName)) {
@@ -614,8 +631,10 @@ function escape (str) {
             .replace(/[\u2013\u2015]/g, '--')
             .replace(/\u2014/g, '---')
             .replace(/\u2026/g, '...')
+            .replace(/\u200B/g, '')
             .replace(/[ ]+\n/g, '\n')
-            .replace(/\s*\\\n/g, '\\\n')
+            //.replace(/\s*\\\n/g, '\\\n')
+            .replace(/\s*\\\n/g, '\n')
             .replace(/\s*\\\n\s*\\\n/g, '\n\n')
             .replace(/\s*\\\n\n/g, '\n\n')
             .replace(/\n-\n/g, '\n')
