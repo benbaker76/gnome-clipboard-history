@@ -661,9 +661,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (this._debouncing !== undefined) {
       this._debouncing++;
     }
-    
-    log(content);
-    
+
     if (content instanceof GLib.Bytes) {
       Clipboard.set_content(St.ClipboardType.CLIPBOARD, 'text/html', content);
       Clipboard.set_content(St.ClipboardType.PRIMARY, 'text/html', content);
