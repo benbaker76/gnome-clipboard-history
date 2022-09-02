@@ -1367,6 +1367,10 @@ function init() {
 let clipboardIndicator;
 
 function enable() {
+  if (clipboardIndicator) {
+    return;
+  }
+
   Store.init();
 
   clipboardIndicator = new ClipboardIndicatorObj();
