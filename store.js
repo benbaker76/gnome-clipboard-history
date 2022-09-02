@@ -124,21 +124,24 @@ function _consumeStream(stream, state, callback) {
         0,
         null,
         (src, res) => {
-          const [data] = src.read_upto_finish(res);
-          src.read_byte(null);
-          let length = src.read_uint32(null);
+          try {
+            const [data] = src.read_upto_finish(res);
+            src.read_byte(null);
+            let length = src.read_uint32(null);
           
-          let text = data ? data.substring(0, length) : '';
-          let html = data ? data.substring(length) : null;
+            let text = data ? data.substring(0, length) : '';
+            let html = data ? data.substring(length) : null;
 
-          const node = new DS.LLNode();
-          node.diskId = node.id = state.nextId++;
-          node.type = DS.TYPE_TEXT;
-          node.text = text;
-          node.html = html;
-          node.favorite = false;
-          state.entries.append(node);
-
+            const node = new DS.LLNode();
+            node.diskId = node.id = state.nextId++;
+            node.type = DS.TYPE_TEXT;
+            node.text = text;
+            node.html = html;
+            node.favorite = false;
+            state.entries.append(node);
+          } catch (e) {
+            logError(e);
+          }
           loop();
         },
       );
